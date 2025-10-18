@@ -1,0 +1,223 @@
+#!/usr/bin/env node
+
+/**
+ * ZCF项目初始化工具命令行入口
+ */
+
+import { Command } from 'commander';
+import chalk from 'chalk';
+import { ZcfInitProject } from '../src/index.js';
+
+const program = new Command();
+
+program
+  .name('zcf-init-project')
+  .description('智能项目AI上下文初始化系统')
+  .version('1.0.0')
+  .argument('[project-path]', '项目路径（默认为当前目录）', '.')
+  .option('-o, --output <path>', '输出目录（默认为项目根目录）')
+  .option('-c, --config <path>', '配置文件路径')
+  .option('-f, --force', '强制覆盖现有文档')
+  .option('-v, --verbose', '详细输出')
+  .option('--phases <phases>', '指定扫描阶段 (quick,module,deep)', 'quick,module,deep')
+  .option('--max-files <number>', '最大文件数限制', '100000')
+  .option('--max-depth <number>', '最大扫描深度', '10')
+  .option('--timeout <number>', '超时时间（毫秒）', '300000')
+  .option('--dry-run', '仅显示将要执行的操作，不实际执行')
+  .option('--no-mermaid', '不生成Mermaid图表')
+  .option('--no-breadcrumbs', '不生成导航面包屑')
+  .option('--no-recommendations', '不生成推荐建议')
+  .action(async (projectPath, options) => {
+    try {
+      console.log(chalk.blue.bold('🚀 ZCF项目初始化工具'));
+      console.log(chalk.gray(`正在初始化项目: ${projectPath}`));
+
+      if (options.verbose) {
+        console.log(chalk.gray('配置选项:'), JSON.stringify(options, null, 2));
+      }
+
+      const initProject = new ZcfInitProject();
+
+      // 解析扫描阶段
+      const phases = options.phases.split(',').map((phase: string) => phase.trim());
+
+      const scanOptions = {
+        path: projectPath,
+        outputPath: options.output,
+        configFile: options.config,
+        force: options.force,
+        verbose: options.verbose,
+        phases,
+        maxFiles: parseInt(options.maxFiles),
+        maxDepth: parseInt(options.maxDepth),
+        timeout: parseInt(options.timeout),
+        dryRun: options.dryRun,
+        documentationConfig: {
+          includeMermaid: options.mermaid !== false,
+          includeBreadcrumbs: options.breadcrumbs !== false,
+          includeRecommendations: options.recommendations !== false
+        }
+      };
+
+      if (options.dryRun) {
+        console.log(chalk.yellow('🔍 干运行模式 - 不会实际执行操作'));
+      }
+
+      const result = await initProject.initialize(scanOptions);
+
+      console.log(chalk.green.bold('✅ 初始化完成！'));
+      console.log(chalk.gray(`扫描统计: ${JSON.stringify(result.statistics, null, 2)}`));
+
+      if (result.recommendations.length > 0) {
+        console.log(chalk.yellow('💡 建议:'));
+        result.recommendations.forEach((rec, index) => {
+          console.log(chalk.yellow(`${index + 1}. ${rec.title}`));
+          if (options.verbose) {
+            console.log(chalk.gray(`   ${rec.description}`));
+          }
+        });
+      }
+
+    } catch (error) {
+      console.error(chalk.red.bold('❌ 初始化失败:'));
+      console.error(chalk.red((error as Error).message));
+
+      if (options.verbose) {
+        console.error(chalk.gray((error as Error).stack));
+      }
+
+      process.exit(1);
+    }
+  });
+
+// 添加子命令
+program
+  .command('config')
+  .description('配置管理')
+  .option('--init', '创建默认配置文件')
+  .option('--validate <path>', '验证配置文件')
+  .option('--show', '显示当前配置')
+  .action(async (options) => {
+    try {
+      const { ScanConfigManager } = await import('../src/config/scan-config.js');
+
+      if (options.init) {
+        const config = ScanConfigManager.createDefault();
+        await ScanConfigManager.saveToFile(config, '.zcf-scan.json');
+        console.log(chalk.green('✅ 默认配置文件已创建: .zcf-scan.json'));
+      }
+
+      if (options.validate) {
+        const config = await ScanConfigManager.loadFromFile(options.validate);
+        const validation = ScanConfigManager.validateConfig(config);
+
+        if (validation.valid) {
+          console.log(chalk.green('✅ 配置文件有效'));
+        } else {
+          console.log(chalk.red('❌ 配置文件无效:'));
+          validation.errors.forEach(error => {
+            console.log(chalk.red(`  - ${error}`));
+          });
+          process.exit(1);
+        }
+      }
+
+      if (options.show) {
+        try {
+          const config = await ScanConfigManager.loadFromProjectRoot('.');
+          const summary = ScanConfigManager.getConfigSummary(config);
+          console.log(chalk.blue('📋 当前配置:'));
+          console.log(JSON.stringify(summary, null, 2));
+        } catch {
+          console.log(chalk.yellow('⚠️  未找到配置文件，使用默认配置'));
+        }
+      }
+
+    } catch (error) {
+      console.error(chalk.red('❌ 配置操作失败:'));
+      console.error(chalk.red((error as Error).message));
+      process.exit(1);
+    }
+  });
+
+program
+  .command('scan')
+  .description('仅执行扫描，不生成文档')
+  .argument('[project-path]', '项目路径（默认为当前目录）', '.')
+  .option('-p, --phases <phases>', '指定扫描阶段 (quick,module,deep)', 'quick,module,deep')
+  .option('-v, --verbose', '详细输出')
+  .option('--json', '以JSON格式输出结果')
+  .action(async (projectPath, options) => {
+    try {
+      console.log(chalk.blue('🔍 开始扫描项目...'));
+
+      const { ZcfInitProject } = await import('../src/index.js');
+      const initProject = new ZcfInitProject();
+
+      const phases = options.phases.split(',').map((phase: string) => phase.trim());
+      const result = await initProject.scanOnly(projectPath, { phases, verbose: options.verbose });
+
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log(chalk.green('✅ 扫描完成！'));
+        console.log(chalk.blue(`📁 模块数量: ${result.modules.length}`));
+        console.log(chalk.blue(`📄 总文件数: ${result.statistics.totalFiles}`));
+        console.log(chalk.blue(`📊 扫描覆盖率: ${result.statistics.coverage.toFixed(2)}%`));
+        console.log(chalk.blue(`⏱️  扫描耗时: ${result.statistics.scanDuration}ms`));
+
+        if (result.modules.length > 0) {
+          console.log(chalk.yellow('\n📦 发现的模块:'));
+          result.modules.forEach(module => {
+            console.log(chalk.yellow(`  - ${module.name} (${module.type})`));
+          });
+        }
+      }
+
+    } catch (error) {
+      console.error(chalk.red('❌ 扫描失败:'));
+      console.error(chalk.red((error as Error).message));
+      process.exit(1);
+    }
+  });
+
+program
+  .command('docs')
+  .description('仅生成文档，基于现有的扫描结果')
+  .argument('[project-path]', '项目路径（默认为当前目录）', '.')
+  .option('-o, --output <path>', '输出目录（默认为项目根目录）')
+  .option('--no-mermaid', '不生成Mermaid图表')
+  .option('--no-breadcrumbs', '不生成导航面包屑')
+  .action(async (projectPath, options) => {
+    try {
+      console.log(chalk.blue('📝 开始生成文档...'));
+
+      const { ZcfInitProject } = await import('../src/index.js');
+      const initProject = new ZcfInitProject();
+
+      const result = await initProject.generateDocsOnly(projectPath, {
+        outputPath: options.output,
+        includeMermaid: options.mermaid !== false,
+        includeBreadcrumbs: options.breadcrumbs !== false
+      });
+
+      console.log(chalk.green('✅ 文档生成完成！'));
+      console.log(chalk.blue(`📄 生成文档数: ${result.documentsGenerated}`));
+      console.log(chalk.blue(`📏 总大小: ${result.totalSize} bytes`));
+      console.log(chalk.blue(`⏱️  生成耗时: ${result.generationTime}ms`));
+
+    } catch (error) {
+      console.error(chalk.red('❌ 文档生成失败:'));
+      console.error(chalk.red((error as Error).message));
+      process.exit(1);
+    }
+  });
+
+// 错误处理
+program.on('command:*', () => {
+  console.error(chalk.red('❌ 未知命令，使用 --help 查看可用命令'));
+  process.exit(1);
+});
+
+// 解析命令行参数
+program.parse();
